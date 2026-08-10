@@ -37,58 +37,113 @@ import pandas as pd          # 표(엑셀) 데이터를 다루는 도구
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# 1) 검색어(키워드) 목록
-#    - 공고 제목 / 품명 / 사업내용 안에 아래 단어 중 "하나라도" 들어있으면 수집합니다.
-#    - 추가하고 싶으면 줄을 하나 늘리고 '단어', 형식으로 적으면 됩니다.
-#    - 빼고 싶으면 그 줄 맨 앞에 # 을 붙이거나 줄을 통째로 지우면 됩니다.
-#    - 띄어쓰기는 자동으로 무시됩니다. ('실험 기기' 와 '실험기기' 를 같은 걸로 봅니다)
+# 1) 검색어(키워드) 목록  ─ 두 그룹으로 나눠서 관리합니다
+#
+#    ▸ CORE_KEYWORDS  : 구체적인 장비·제품 이름 (적중률 높음)  → 결과에 ★핵심 표시
+#    ▸ WIDE_KEYWORDS  : 분야를 넓게 훑는 포괄적인 단어         → 결과에 참고 표시
+#
+#    두 그룹 모두 수집은 하되, 엑셀 맨 앞 '중요도' 열로 구분해 드립니다.
+#    → 바쁘실 땐 ★핵심만 보시고, 시간 여유 있을 때 참고까지 훑으시면 됩니다.
+#
+#    [수정 방법]
+#      - 추가: 줄을 하나 늘리고  '단어',  형식으로 적으면 됩니다.
+#      - 삭제: 그 줄 맨 앞에 # 을 붙이거나 줄을 통째로 지우세요.
+#      - 띄어쓰기는 자동 무시됩니다. ('실험 기기' = '실험기기')
 # ---------------------------------------------------------------------------
-KEYWORDS = [
-    # --- 핵심 장비 ---
-    '실험기기',
-    '실험장비',
-    '이화학',
+
+# ★ 핵심 키워드 : 구체적인 장비명 (이게 걸리면 바로 영업 대상)
+CORE_KEYWORDS = [
+    # 배양·항온 계열
     '인큐베이터',
-    '배양기',
     'CO2배양기',
+    '배양기',
+    '배양',
+    '항온항습기',
+    '항온항습',
     '항온',
     '항습',
+    '수조',
     '챔버',
-    '오븐',
-    '건조기',
-    '멸균기',
+
+    # 멸균·건조·가열 계열
+    '고압멸균',
     '고압증기',
+    '오토클레이브',
+    '클레이브',
+    '멸균기',
+    '멸균',
+    '건조기',
+    '오븐',
+
+    # 냉장·냉동 계열
     '초저온',
-    '냉동고',
     '디프프리저',
+    '냉동고',
+    '냉장고',
+    '제빙기',
+    '제빙',
+
+    # 전처리·분석 계열
     '원심분리기',
     '진탕기',
     '쉐이커',
     '교반기',
     '현미경',
     '분광광도계',
+
+    # 클린·작업환경 계열
     '클린벤치',
+    '클린룸',
+    '무균작업대',
     '안전캐비닛',
     '흄후드',
-    '무균작업대',
+    '작업대',
+    '실험대',
 
-    # --- 넓은 범위(연구·바이오·시험) ---
+    # 묶음 표현
+    '실험기기',
+    '실험장비',
     '연구장비',
     '연구기자재',
-    '실험실',
-    '실험대',
-    '바이오',
-    '세포',
     '시험장비',
     '분석장비',
     '분석기기',
     '계측장비',
-    '시약',
+    '이화학',
+]
+
+# ○ 넓은 키워드 : 분야를 폭넓게 훑는 단어 (놓치지 않기 위한 그물)
+WIDE_KEYWORDS = [
+    '실험실',
+    '실험',
+    '실습',
+    '시험',
+    '연구',
+    '과학',
+    '기자재',
+    '장비',
+    '의료',
+    '의무',
+    '제약',
     '진단',
+    '시약',
+    '바이오',
     '생명공학',
     '유전자',
-    '항온항습기',
+    '세포',
+    '생물',
+    '미생물',
+    '동물',
+    '식물',
+    '곤충',
+    '해양',
+    '바다',
+    '클린',
+    '건조',
 ]
+
+# 실제 검색에 쓰이는 전체 목록 (건드리지 마세요)
+KEYWORDS = CORE_KEYWORDS + WIDE_KEYWORDS
 
 # ---------------------------------------------------------------------------
 # 2) 제외 키워드 (선택)
@@ -134,6 +189,34 @@ DAILY_CUTOFF_HOUR = 10
 # 6) 메일 제목 앞에 붙일 말머리
 # ---------------------------------------------------------------------------
 MAIL_SUBJECT_PREFIX = '[나라장터 입찰정보]'
+
+# ---------------------------------------------------------------------------
+# 7) 사전규격 공고링크 설정
+#
+#    2024년 '차세대 나라장터' 개통 이후 본공고와 사전규격의 상세화면 주소 체계가
+#    완전히 달라졌습니다. 본공고는 API가 상세주소를 그대로 주지만(bidNtceDtlUrl),
+#    사전규격은 주소를 주지 않는 경우가 있어 아래 규칙으로 직접 만들어 넣습니다.
+#
+#    [우선순위]
+#      1순위: API가 주소를 주면 그대로 사용
+#      2순위: 아래 PRESPEC_LINK_TEMPLATE 이 채워져 있으면 그것으로 주소를 생성
+#      3순위: 나라장터 사전규격 검색화면 링크 (등록번호로 바로 조회 가능)
+#
+#    ※ 나중에 사전규격 상세주소 형식을 확인하면, 아래 한 줄만 바꾸면 됩니다.
+#      예) PRESPEC_LINK_TEMPLATE = 'https://www.g2b.go.kr/link/○○○/single/?번호={no}'
+#          ({no} 자리에 등록번호가 자동으로 들어갑니다)
+# ---------------------------------------------------------------------------
+PRESPEC_LINK_TEMPLATE = ''
+
+# 사전규격 검색 화면 (등록번호를 붙여넣으면 바로 조회됩니다)
+PRESPEC_SEARCH_URL = 'https://www.g2b.go.kr:8341/bs/beffatStndrdUrlSearchList.do?gCode=B553766&cssStyle=3&taskClCd=0'
+
+# ---------------------------------------------------------------------------
+# 8) 점검 모드
+#    True 로 바꾸면 API가 실제로 어떤 항목(필드)들을 주는지 로그에 찍어줍니다.
+#    링크나 예산이 비어 있을 때 원인을 찾는 용도이며, 평소엔 False 로 두세요.
+# ---------------------------------------------------------------------------
+DEBUG_SHOW_FIELDS = False
 
 # =============================================================================
 # ★★★ 사용자 설정 영역 끝 ★★★
@@ -189,10 +272,18 @@ API_ENDPOINTS = {
 
 # 엑셀에 넣을 열(컬럼) 순서
 COLUMNS = [
-    '구분', '업무', '공고명', '수요기관', '공고기관',
+    '중요도', '구분', '업무', '공고명', '수요기관', '공고기관',
     '등록/공고일시', '사업기한(마감일)', '배정예산(원)',
     '사업내용요약', '매칭키워드', '공고번호', '공고링크',
 ]
+
+# 중요도 표시 문구
+LEVEL_CORE = '★핵심'
+LEVEL_WIDE = '참고'
+
+# 발주계획처럼 주소를 못 찾은 서비스를 기억해 두는 곳 (같은 오류 반복 방지)
+UNAVAILABLE_STAGES = set()
+DEAD_PATHS = set()          # 400/404 가 난 주소 (다시 시도하지 않음)
 
 
 # -----------------------------------------------------------------------------
@@ -302,7 +393,16 @@ def call_api(path, params, page_size):
         return None
 
     if response.status_code != 200:
-        log(f'   ⚠️ 서버 응답코드 {response.status_code} ({path})')
+        # 400/404 는 대부분 "그 주소의 서비스가 없다"는 뜻이므로
+        # 한 번만 알리고 다음부터는 이 주소를 아예 시도하지 않습니다.
+        if response.status_code in (400, 404):
+            if path not in DEAD_PATHS:
+                snippet = re.sub(r'<[^>]+>', ' ', response.text[:200]).strip()
+                log(f'   ⓘ 미제공 주소 [{response.status_code}] '
+                    f'{path.split("/")[-1]} {snippet[:80]}')
+            DEAD_PATHS.add(path)
+        else:
+            log(f'   ⚠️ 서버 응답코드 {response.status_code} ({path.split("/")[-1]})')
         return None
 
     # 정상이면 JSON, 문제가 있으면 XML 형태의 오류문이 오는 경우가 있습니다.
@@ -385,13 +485,29 @@ def fetch_with_fallback(stage, biz_type, start_dt, end_dt):
     한 단계·업무구분에 대해 주소 후보를 차례로 시도해서
     데이터가 나오는 주소를 자동으로 찾아 사용합니다.
     """
-    paths = API_ENDPOINTS.get(stage, {}).get(biz_type, [])
+    # 이미 "이 서비스는 주소 자체가 없다"고 판명된 단계는 조용히 건너뜁니다.
+    if stage in UNAVAILABLE_STAGES:
+        return []
+
+    all_paths = API_ENDPOINTS.get(stage, {}).get(biz_type, [])
+    paths = [p for p in all_paths if p not in DEAD_PATHS]
+
+    items = []
     for path in paths:
         items = fetch_all(path, start_dt, end_dt)
         if items:
             log(f'   ✅ {stage}-{biz_type}: {len(items)}건 수신 ({path.split("/")[-1]})')
             return items
-    log(f'   · {stage}-{biz_type}: 수신 0건 (해당 기간 데이터 없음 또는 미제공 서비스)')
+
+    # 이 단계에 등록된 모든 주소가 "없는 주소"로 판명되면 단계 전체를 접습니다.
+    stage_paths = [p for paths_by_biz in API_ENDPOINTS.get(stage, {}).values()
+                   for p in paths_by_biz]
+    if stage_paths and all(p in DEAD_PATHS for p in stage_paths):
+        UNAVAILABLE_STAGES.add(stage)
+        log(f'   ⏭  {stage}: 조달청이 제공하지 않는 주소라 이 단계는 건너뜁니다.')
+        return []
+
+    log(f'   · {stage}-{biz_type}: 수신 0건')
     return []
 
 
@@ -399,14 +515,36 @@ def fetch_with_fallback(stage, biz_type, start_dt, end_dt):
 # [핵심 3] 키워드 걸러내기
 # -----------------------------------------------------------------------------
 def normalize(text):
-    """비교하기 좋게 글자를 정리합니다. (공백/기호 제거 + 소문자화)"""
+    """
+    비교하기 좋게 글자를 정리합니다.
+    괄호·쉼표 같은 기호는 '띄어쓰기'로 바꾸고, 연속된 공백은 하나로 줄입니다.
+
+    ※ 기호를 '삭제'하지 않고 '공백'으로 바꾸는 이유:
+       예) '강릉~제진 단선전철' 에서 공백을 지워버리면 '제진단선' 이 되어
+           엉뚱하게 '진단' 키워드에 걸립니다. 공백을 남겨두면 이런 오탐이 사라집니다.
+    """
     if text is None:
         return ''
-    return re.sub(r'[\s\-_/()\[\]·,.]', '', str(text)).lower()
+    cleaned = re.sub(r'[\-_/()\[\]·,.~:;|]', ' ', str(text)).lower()
+    return re.sub(r'\s+', ' ', cleaned).strip()
+
+
+def strip_spaces(text):
+    """띄어쓰기를 모두 없앤 형태 (긴 키워드 비교에만 사용)"""
+    return re.sub(r'\s+', '', text)
 
 
 NORMALIZED_KEYWORDS = [(kw, normalize(kw)) for kw in KEYWORDS]
 NORMALIZED_EXCLUDES = [normalize(kw) for kw in EXCLUDE_KEYWORDS if kw.strip()]
+CORE_KEYWORD_SET = set(CORE_KEYWORDS)
+
+
+def decide_level(hits):
+    """걸린 키워드 중에 '핵심 장비명'이 하나라도 있으면 ★핵심으로 표시합니다."""
+    for keyword in hits:
+        if keyword in CORE_KEYWORD_SET:
+            return LEVEL_CORE
+    return LEVEL_WIDE
 
 
 def match_keywords(text):
@@ -418,13 +556,25 @@ def match_keywords(text):
     haystack = normalize(text)
     if not haystack:
         return []
+    haystack_tight = strip_spaces(haystack)
 
     for exclude in NORMALIZED_EXCLUDES:
         if exclude and exclude in haystack:
             return []
 
-    hits = [original for original, norm in NORMALIZED_KEYWORDS
-            if norm and norm in haystack]
+    hits = []
+    for original, norm in NORMALIZED_KEYWORDS:
+        if not norm:
+            continue
+        if norm in haystack:
+            hits.append(original)
+            continue
+        # 5글자 이상인 긴 키워드는 띄어쓰기가 달라도 찾아줍니다.
+        # (예: 키워드 '무균작업대'  ↔  공고명 '무균 작업대')
+        # 짧은 단어까지 이렇게 하면 엉뚱한 게 걸려서 길이 제한을 뒀습니다.
+        tight = strip_spaces(norm)
+        if len(tight) >= 5 and tight in haystack_tight:
+            hits.append(original)
     return hits
 
 
@@ -493,14 +643,40 @@ def build_summary(item, stage):
 
 
 def build_link(item, stage):
-    """공고 상세 링크를 만듭니다. API가 링크를 주면 그대로 쓰고, 없으면 빈칸."""
+    """
+    공고 상세 링크를 만듭니다.
+
+    [1순위] API가 상세주소를 준 경우 → 그대로 사용
+    [2순위] 사전규격이면 → 등록번호로 주소를 직접 조립
+    [3순위] 그래도 없으면 → 사전규격 검색화면 주소 (절대 빈칸으로 두지 않습니다)
+    """
+    # ── 1순위: API가 주는 주소 (이름이 서비스마다 달라서 후보를 넉넉히 둡니다)
     url = pick(item, [
         'bidNtceDtlUrl',        # 본공고 상세 URL
-        'ntceSpecDocUrl1',      # 규격서 파일 URL
-        'specDocUrl',
+        'bfSpecRgstDtlUrl',     # 사전규격 상세 URL
+        'specDtlUrl',
+        'stdDtlUrl',
+        'prestdDtlUrl',
         'dtlUrl',
         'srvceDtlUrl',
+        'ntceSpecDocUrl1',      # 규격서 파일 URL
+        'specDocUrl',
     ])
+    if url.startswith('http'):
+        return url
+
+    # ── 2·3순위: 사전규격은 반드시 클릭 가능한 주소를 채워 넣습니다.
+    if stage == '사전규격':
+        reg_no = pick(item, [
+            'bfSpecRgstNo',     # 사전규격등록번호
+            'specRgstNo',
+            'befatStdrdNo',
+            'rgstNo',
+        ])
+        if reg_no and PRESPEC_LINK_TEMPLATE:
+            return PRESPEC_LINK_TEMPLATE.replace('{no}', reg_no)
+        return PRESPEC_SEARCH_URL
+
     return url
 
 
@@ -523,6 +699,7 @@ def parse_item(item, stage, biz_type):
         return None     # 키워드에 안 걸리면 버립니다.
 
     row = {
+        '중요도': decide_level(hits),
         '구분': stage,
         '업무': biz_type,
         '공고명': title,
@@ -568,9 +745,12 @@ def make_excel(df, file_path, start_dt, end_dt):
         sheet = writer.sheets['입찰정보']
 
         # --- 맨 윗줄: 수집 기간 안내 ---
+        core_count = int((df['중요도'] == LEVEL_CORE).sum()) if '중요도' in df else 0
         sheet.cell(row=1, column=1).value = (
             f'수집기간: {start_dt.strftime("%Y-%m-%d %H:%M")} ~ '
-            f'{end_dt.strftime("%Y-%m-%d %H:%M")}  |  총 {len(df)}건'
+            f'{end_dt.strftime("%Y-%m-%d %H:%M")}  |  총 {len(df)}건 '
+            f'(★핵심 {core_count}건 / 참고 {len(df) - core_count}건)  '
+            f'※ 중요도 열의 필터를 눌러 ★핵심만 볼 수 있습니다'
         )
         sheet.cell(row=1, column=1).font = Font(bold=True, size=11)
 
@@ -589,9 +769,9 @@ def make_excel(df, file_path, start_dt, end_dt):
 
         # --- 열 너비 지정 ---
         widths = {
-            '구분': 10, '업무': 8, '공고명': 55, '수요기관': 22, '공고기관': 22,
+            '중요도': 9, '구분': 10, '업무': 8, '공고명': 55, '수요기관': 22, '공고기관': 22,
             '등록/공고일시': 18, '사업기한(마감일)': 18, '배정예산(원)': 16,
-            '사업내용요약': 60, '매칭키워드': 20, '공고번호': 18, '공고링크': 35,
+            '사업내용요약': 60, '매칭키워드': 22, '공고번호': 18, '공고링크': 35,
         }
         for idx, column_name in enumerate(df.columns, start=1):
             sheet.column_dimensions[get_column_letter(idx)].width = widths.get(column_name, 18)
@@ -601,6 +781,7 @@ def make_excel(df, file_path, start_dt, end_dt):
         amount_col = columns.index('배정예산(원)') + 1 if '배정예산(원)' in columns else None
         link_col = columns.index('공고링크') + 1 if '공고링크' in columns else None
         stage_col = columns.index('구분') + 1 if '구분' in columns else None
+        level_col = columns.index('중요도') + 1 if '중요도' in columns else None
 
         stage_colors = {
             '사업계획': 'FFF2CC',   # 연노랑
@@ -627,18 +808,32 @@ def make_excel(df, file_path, start_dt, end_dt):
                     stage_cell.fill = PatternFill('solid', fgColor=color)
                 stage_cell.alignment = Alignment(horizontal='center', vertical='top')
 
+            if level_col:
+                level_cell = sheet.cell(row=row_idx, column=level_col)
+                if str(level_cell.value) == LEVEL_CORE:
+                    level_cell.fill = PatternFill('solid', fgColor='FFD966')  # 진노랑
+                    level_cell.font = Font(size=10, bold=True, color='7F6000')
+                else:
+                    level_cell.fill = PatternFill('solid', fgColor='F2F2F2')  # 회색
+                    level_cell.font = Font(size=10, color='808080')
+                level_cell.alignment = Alignment(horizontal='center', vertical='top')
+
             if link_col:
                 link_cell = sheet.cell(row=row_idx, column=link_col)
                 url = str(link_cell.value or '').strip()
                 if url.startswith('http'):
                     link_cell.hyperlink = url
-                    link_cell.value = '공고 바로가기'
+                    # 사전규격 검색화면으로 보내는 경우엔 문구를 다르게 표시합니다.
+                    if url == PRESPEC_SEARCH_URL:
+                        link_cell.value = '사전규격 검색(번호로 조회)'
+                    else:
+                        link_cell.value = '공고 바로가기'
                     link_cell.font = Font(color='0563C1', underline='single', size=10)
 
         # --- 필터 + 틀 고정 ---
         last_col_letter = get_column_letter(len(columns))
         sheet.auto_filter.ref = f'A2:{last_col_letter}{len(df) + 2}'
-        sheet.freeze_panes = 'C3'
+        sheet.freeze_panes = 'D3'   # 중요도/구분/업무 열은 스크롤해도 항상 보이게
 
     return file_path
 
@@ -660,12 +855,17 @@ def build_mail_body(df, start_dt, end_dt):
         </div>
         """
 
-    # 단계별 건수 요약
+    # 단계별 / 중요도별 건수 요약
     counts = df['구분'].value_counts().to_dict()
     summary_line = ' / '.join(f'{k} {v}건' for k, v in counts.items())
+    core_df = df[df['중요도'] == LEVEL_CORE]
+    core_count = len(core_df)
+
+    # 메일 본문에는 ★핵심 건만 보여줍니다. (핵심이 없으면 전체에서 상위 30건)
+    preview_df = core_df if core_count else df
 
     rows_html = ''
-    for _, row in df.head(30).iterrows():
+    for _, row in preview_df.head(30).iterrows():
         budget = row['배정예산(원)']
         budget_text = f'{budget:,}' if isinstance(budget, int) else '-'
         link = str(row['공고링크'] or '')
@@ -679,15 +879,20 @@ def build_mail_body(df, start_dt, end_dt):
             <td style="border:1px solid #ddd;padding:6px;text-align:center;">{link_html}</td>
           </tr>"""
 
-    more_note = ('<p style="color:#666;">※ 상위 30건만 표시했습니다. '
-                 '전체 내용은 첨부된 엑셀 파일을 확인해 주세요.</p>'
-                 if len(df) > 30 else '')
+    more_note = ('<p style="color:#666;">※ 위 표는 일부만 보여드린 것입니다. '
+                 '전체 내용은 첨부된 엑셀 파일을 확인해 주세요. '
+                 '엑셀의 <b>중요도</b> 열 필터에서 <b>★핵심</b>만 골라 보실 수 있습니다.</p>')
 
     return f"""
     <div style="font-family:'맑은 고딕',sans-serif;font-size:14px;">
       <p>안녕하세요. 나라장터 입찰정보 자동수집 결과입니다.</p>
       <p><b>수집기간:</b> {period_text}<br>
-         <b>총 건수:</b> {len(df)}건 ({summary_line})</p>
+         <b>총 건수:</b> {len(df)}건
+         (<b style="color:#c55a11;">★핵심 {core_count}건</b> / 참고 {len(df) - core_count}건)<br>
+         <b>단계별:</b> {summary_line}</p>
+      <p style="margin-bottom:4px;"><b>
+        {'★핵심 공고 미리보기' if core_count else '수집 결과 미리보기'}
+      </b></p>
       <table style="border-collapse:collapse;font-size:13px;">
         <thead>
           <tr style="background:#1F4E79;color:#fff;">
@@ -787,6 +992,14 @@ def main():
                 items = []
 
             raw_total += len(items)
+
+            # 점검 모드: API가 실제로 어떤 항목을 주는지 첫 1건만 펼쳐 보여줍니다.
+            if DEBUG_SHOW_FIELDS and items and isinstance(items[0], dict):
+                log(f'   🔧 [{stage}-{biz_type}] API가 주는 항목 목록:')
+                for key in sorted(items[0].keys()):
+                    sample = str(items[0].get(key, ''))[:60]
+                    log(f'        {key} = {sample}')
+
             for item in items:
                 if not isinstance(item, dict):
                     continue
@@ -800,13 +1013,16 @@ def main():
     if rows:
         df = pd.DataFrame(rows, columns=COLUMNS)
         df = df.drop_duplicates(subset=['구분', '공고번호', '공고명'], keep='first')
-        # 진행 단계 순서(사업계획 → 사전규격 → 본공고)로 정렬하고,
-        # 같은 단계 안에서는 최신 공고가 위로 오게 합니다.
+        # ★핵심을 맨 위로 올리고,
+        # 그 안에서 진행 단계(사업계획 → 사전규격 → 본공고),
+        # 다시 그 안에서 최신 공고 순으로 정렬합니다.
         stage_order = {'사업계획': 0, '사전규격': 1, '본공고': 2}
+        level_order = {LEVEL_CORE: 0, LEVEL_WIDE: 1}
+        df['_중요'] = df['중요도'].map(level_order).fillna(9)
         df['_순서'] = df['구분'].map(stage_order).fillna(9)
         df = df.sort_values(
-            by=['_순서', '등록/공고일시'], ascending=[True, False]
-        ).drop(columns=['_순서']).reset_index(drop=True)
+            by=['_중요', '_순서', '등록/공고일시'], ascending=[True, True, False]
+        ).drop(columns=['_중요', '_순서']).reset_index(drop=True)
     else:
         df = pd.DataFrame(columns=COLUMNS)
 
@@ -821,8 +1037,9 @@ def main():
         log('📁 수집 결과가 없어 엑셀은 만들지 않습니다.')
 
     # (5) 메일 발송
+    core_count = int((df['중요도'] == LEVEL_CORE).sum()) if not df.empty else 0
     subject = (f'{MAIL_SUBJECT_PREFIX} {end_dt.strftime("%m월 %d일")} '
-               f'신규 {len(df)}건')
+               f'★핵심 {core_count}건 / 전체 {len(df)}건')
     body = build_mail_body(df, start_dt, end_dt)
     send_email(subject, body, attachment)
 
