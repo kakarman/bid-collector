@@ -162,7 +162,10 @@ EXCLUDE_KEYWORDS = [
 #    - 필요 없는 단계는 False 로 바꾸면 그만큼 빨라집니다.
 # ---------------------------------------------------------------------------
 COLLECT_STAGES = {
-    '사업계획': True,   # 발주계획(연간/분기 발주 예정 사업)
+    # ⚠️ 발주계획(사업계획)은 조달청이 API 주소를 개편해서 현재 연결되지 않습니다.
+    #    켜두면 매번 접속 실패로 시간만 오래 걸려서 기본값을 False 로 두었습니다.
+    #    나중에 정확한 주소를 확인하면 True 로 바꾸시면 됩니다.
+    '사업계획': False,  # 발주계획(연간/분기 발주 예정 사업)
     '사전규격': True,   # 규격 사전공개(본공고 나오기 전 단계) ★영업 골든타임
     '본공고': True,     # 실제 입찰공고
 }
@@ -228,11 +231,17 @@ DEBUG_SHOW_FIELDS = False
 # 기본 상수들
 # -----------------------------------------------------------------------------
 KST = timezone(timedelta(hours=9))          # 한국 표준시(UTC+9)
-API_BASE = 'http://apis.data.go.kr/1230000'  # 조달청 Open API 공통 주소
+API_HOST = 'apis.data.go.kr/1230000'        # 조달청 Open API 공통 주소
+API_SCHEMES = ['https', 'http']             # https 우선, 안 되면 http로 재시도
 PAGE_SIZE = 500        # 한 번 요청할 때 가져올 건수 (너무 크면 실패할 수 있어 500)
 MAX_PAGES = 30         # 한 종류당 최대 페이지 수 (안전장치: 무한루프 방지)
-REQUEST_TIMEOUT = 30   # 응답을 기다리는 최대 시간(초)
 SLEEP_BETWEEN_CALLS = 0.3  # API 호출 사이 쉬는 시간(초) - 과부하 방지
+
+# 조달청 서버가 가끔 응답을 안 주기 때문에(우리 잘못이 아님) 자동으로 다시 시도합니다.
+CONNECT_TIMEOUT = 10   # 서버와 연결되기까지 기다리는 시간(초)
+READ_TIMEOUT = 60      # 연결된 뒤 데이터를 다 받을 때까지 기다리는 시간(초)
+MAX_RETRY = 3          # 통신 실패 시 다시 시도할 횟수
+RETRY_WAIT = 3         # 재시도 전 기다리는 시간(초). 실패할수록 2배씩 늘어납니다.
 
 SERVICE_KEY = ''       # 공공데이터포털 인증키 (실행할 때 Secrets 에서 채워집니다)
 
@@ -284,6 +293,49 @@ LEVEL_WIDE = '참고'
 # 발주계획처럼 주소를 못 찾은 서비스를 기억해 두는 곳 (같은 오류 반복 방지)
 UNAVAILABLE_STAGES = set()
 DEAD_PATHS = set()          # 400/404 가 난 주소 (다시 시도하지 않음)
+NETWORK_FAILS = {}          # 주소별 통신 실패 횟수
+WARNINGS = []               # 실행 중 생긴 문제 (메일 본문에 함께 알려드립니다)
+SESSION = None              # 접속을 재사용해 속도·안정성을 높이는 통신 객체
+
+
+def add_warning(message):
+    """메일로 알려드릴 경고를 기록합니다. (같은 내용은 한 번만)"""
+    if message not in WARNINGS:
+        WARNINGS.append(message)
+
+
+def get_session():
+    """
+    통신 담당 객체를 만듭니다.
+    - 접속을 재사용해서 매번 새로 연결하는 낭비를 줄이고
+    - 서버가 일시적으로 먹통일 때(500/502/503/504, 연결 끊김) 자동으로 재시도합니다.
+    """
+    global SESSION
+    if SESSION is not None:
+        return SESSION
+
+    from requests.adapters import HTTPAdapter
+    try:
+        from urllib3.util.retry import Retry
+    except ImportError:                      # 아주 오래된 환경 대비
+        from requests.packages.urllib3.util.retry import Retry
+
+    retry_rule = Retry(
+        total=MAX_RETRY,
+        connect=MAX_RETRY,
+        read=2,
+        backoff_factor=1.5,                  # 1.5초 → 3초 → 6초 간격으로 재시도
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(['GET']),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry_rule, pool_connections=4, pool_maxsize=8)
+
+    SESSION = requests.Session()
+    SESSION.mount('https://', adapter)
+    SESSION.mount('http://', adapter)
+    SESSION.headers.update({'User-Agent': 'bid-collector/1.0'})
+    return SESSION
 
 
 # -----------------------------------------------------------------------------
@@ -381,15 +433,44 @@ def call_api(path, params, page_size):
     조달청 API를 1회 호출하고 결과(JSON)를 돌려줍니다.
     실패하면 None 을 돌려주고, 이유를 로그에 남깁니다.
     """
-    url = f'{API_BASE}/{path}'
     query = dict(params)
     query['numOfRows'] = page_size
     query['type'] = 'json'
 
-    try:
-        response = requests.get(url, params=query, timeout=REQUEST_TIMEOUT)
-    except Exception as error:
-        log(f'   ⚠️ 통신 실패({path}): {error}')
+    op_name = path.split('/')[-1]
+    response = None
+    last_error = None
+
+    # https → http 순서로, 각각 여러 번 시도합니다.
+    # (조달청 서버는 접속이 몰리면 응답을 아예 안 주는 경우가 있습니다)
+    for scheme in API_SCHEMES:
+        url = f'{scheme}://{API_HOST}/{path}'
+        for attempt in range(1, MAX_RETRY + 1):
+            try:
+                response = get_session().get(
+                    url, params=query, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+                last_error = None
+                break
+            except Exception as error:
+                last_error = error
+                response = None
+                if attempt < MAX_RETRY:
+                    wait = RETRY_WAIT * (2 ** (attempt - 1))   # 3초 → 6초 → 12초
+                    log(f'   ⏳ 응답이 없어 {wait}초 뒤 다시 시도합니다 '
+                        f'({op_name}, {attempt}/{MAX_RETRY})')
+                    time.sleep(wait)
+        if response is not None:
+            break
+
+    if response is None:
+        # 여러 번 시도해도 실패 → 이 주소는 이번 실행에서 더 시도하지 않습니다.
+        fails = NETWORK_FAILS.get(path, 0) + 1
+        NETWORK_FAILS[path] = fails
+        reason = type(last_error).__name__ if last_error else '알 수 없음'
+        log(f'   ⚠️ 통신 실패({op_name}) - {reason}. 조달청 서버 응답 없음.')
+        if fails >= 2:
+            DEAD_PATHS.add(path)
+            add_warning(f'{op_name}: 조달청 서버 접속 실패로 이번 회차는 건너뛰었습니다.')
         return None
 
     if response.status_code != 200:
@@ -841,6 +922,23 @@ def make_excel(df, file_path, start_dt, end_dt):
 # -----------------------------------------------------------------------------
 # [핵심 6] 이메일 발송
 # -----------------------------------------------------------------------------
+def warning_html():
+    """조달청 서버 문제 등으로 일부를 못 가져왔을 때 메일 맨 위에 알려줍니다."""
+    if not WARNINGS:
+        return ''
+    items = ''.join(f'<li>{w}</li>' for w in WARNINGS)
+    return f"""
+      <div style="background:#FFF4E5;border-left:4px solid #F0A030;
+                  padding:10px 14px;margin:10px 0;">
+        <b>⚠️ 참고: 이번 수집 중 일부 문제가 있었습니다</b>
+        <ul style="margin:6px 0 0 0;padding-left:18px;">{items}</ul>
+        <div style="color:#666;font-size:12px;margin-top:6px;">
+          조달청 서버 사정으로 생기는 일시적 현상인 경우가 많습니다.
+          누락이 걱정되시면 Actions에서 수동 실행(lookback_days=2)을 한 번 해주세요.
+        </div>
+      </div>"""
+
+
 def build_mail_body(df, start_dt, end_dt):
     """메일 본문(HTML)을 만듭니다. 엑셀을 열지 않아도 대충 볼 수 있게 해줍니다."""
     period_text = (f'{start_dt.strftime("%Y-%m-%d %H:%M")} ~ '
@@ -850,6 +948,7 @@ def build_mail_body(df, start_dt, end_dt):
         return f"""
         <div style="font-family:'맑은 고딕',sans-serif;font-size:14px;">
           <p>안녕하세요. 나라장터 입찰정보 자동수집 결과입니다.</p>
+          {warning_html()}
           <p><b>수집기간:</b> {period_text}</p>
           <p style="color:#c00;"><b>해당 기간에 키워드와 일치하는 신규 공고가 없습니다.</b></p>
         </div>
@@ -886,6 +985,7 @@ def build_mail_body(df, start_dt, end_dt):
     return f"""
     <div style="font-family:'맑은 고딕',sans-serif;font-size:14px;">
       <p>안녕하세요. 나라장터 입찰정보 자동수집 결과입니다.</p>
+      {warning_html()}
       <p><b>수집기간:</b> {period_text}<br>
          <b>총 건수:</b> {len(df)}건
          (<b style="color:#c55a11;">★핵심 {core_count}건</b> / 참고 {len(df) - core_count}건)<br>
@@ -1008,6 +1108,10 @@ def main():
                     rows.append(row)
 
     log(f'📊 전체 수신 {raw_total}건 → 키워드 일치 {len(rows)}건')
+    if WARNINGS:
+        log('⚠️ 이번 실행 중 아래 문제가 있었습니다 (메일에도 함께 안내됩니다)')
+        for warning in WARNINGS:
+            log(f'    - {warning}')
 
     # (3) 표로 정리 + 중복 제거 + 정렬
     if rows:
