@@ -281,9 +281,9 @@ API_ENDPOINTS = {
 
 # 엑셀에 넣을 열(컬럼) 순서
 COLUMNS = [
-    '중요도', '구분', '업무', '공고명', '수요기관', '공고기관',
+    '중요도', '구분', '업무', '매칭키워드', '공고명', '수요기관', '공고기관',
     '등록/공고일시', '사업기한(마감일)', '배정예산(원)',
-    '사업내용요약', '매칭키워드', '공고번호', '공고링크',
+    '사업내용요약', '공고번호', '공고링크',
 ]
 
 # 중요도 표시 문구
@@ -850,10 +850,12 @@ def make_excel(df, file_path, start_dt, end_dt):
 
         # --- 열 너비 지정 ---
         widths = {
-            '중요도': 9, '구분': 10, '업무': 8, '공고명': 55, '수요기관': 22, '공고기관': 22,
+            '중요도': 9, '구분': 10, '업무': 8, '매칭키워드': 26,
+            '공고명': 55, '수요기관': 22, '공고기관': 22,
             '등록/공고일시': 18, '사업기한(마감일)': 18, '배정예산(원)': 16,
-            '사업내용요약': 60, '매칭키워드': 22, '공고번호': 18, '공고링크': 35,
+            '사업내용요약': 60, '공고번호': 18, '공고링크': 35,
         }
+     
         for idx, column_name in enumerate(df.columns, start=1):
             sheet.column_dimensions[get_column_letter(idx)].width = widths.get(column_name, 18)
 
@@ -914,7 +916,7 @@ def make_excel(df, file_path, start_dt, end_dt):
         # --- 필터 + 틀 고정 ---
         last_col_letter = get_column_letter(len(columns))
         sheet.auto_filter.ref = f'A2:{last_col_letter}{len(df) + 2}'
-        sheet.freeze_panes = 'D3'   # 중요도/구분/업무 열은 스크롤해도 항상 보이게
+        sheet.freeze_panes = 'E3'   # 중요도/구분/업무 열은 스크롤해도 항상 보이게
 
     return file_path
 
