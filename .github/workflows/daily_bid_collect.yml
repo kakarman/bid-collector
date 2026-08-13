@@ -2,7 +2,7 @@ name: 입찰정보 자동수집 (매일 10시)
 
 on:
   schedule:
-    - cron: '10 5 * * 1-5'
+    - cron: '33 5 * * 1-5'
 
   workflow_dispatch:
     inputs:
