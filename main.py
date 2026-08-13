@@ -1047,7 +1047,7 @@ def send_email(subject, html_body, attachment_path=None):
         server.login(sender, password.replace(' ', ''))
         server.send_message(message)
 
-    log(f'📧 메일 발송 완료 → {", ".join(receiver_list)}')
+    log(f'📧 메일 발송 완료 → 수신자 {len(receiver_list)}명')
 
 
 # -----------------------------------------------------------------------------
