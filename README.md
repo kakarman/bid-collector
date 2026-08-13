@@ -143,9 +143,9 @@ GitHub의 **금고(Secrets)** 에 넣어두고 프로그램이 꺼내 쓰게 합
 | Name (이름) | Secret (값) | 설명 |
 |---|---|---|
 | `SERVICE_KEY` | `abc123...` | 1단계에서 복사한 **Decoding 인증키** |
-| `GMAIL_USER` | `saaad26@gmail.com` | 메일을 **보낼** 지메일 주소 |
+| `GMAIL_USER` | `your@gmail.com` | 메일을 **보낼** 지메일 주소 |
 | `GMAIL_APP_PASSWORD` | `abcdefghijklmnop` | 2단계에서 받은 **앱 비밀번호 16자리** |
-| `MAIL_TO` | `saaad26@gmail.com` | 메일을 **받을** 주소 |
+| `MAIL_TO` | `your@gmail.com` | 메일을 **받을** 주소 |
 
 > 📬 여러 명에게 보내고 싶으면 `MAIL_TO` 값에 쉼표로 나열하세요.
 > 예: `saaad26@gmail.com, teamlead@company.co.kr, sales@company.co.kr`
