@@ -1,9 +1,6 @@
 name: 입찰정보 자동수집 (매일 10시)
 
 on:
-  schedule:
-    - cron: '38 1 * * 1-5'
-
   workflow_dispatch:
     inputs:
       lookback_days:
