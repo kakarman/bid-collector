@@ -931,7 +931,9 @@ def build_summary(item, stage):
     if stage == '사전규격':
         add('의견등록마감', ['opninRgstClseDt'])
 
-    return ' | '.join(parts)
+    # 엑셀 한 칸 안에서 항목마다 줄바꿈되도록 '\n' 으로 잇습니다.
+    # (예전에는 ' | ' 로 이어붙여서 한 줄로 길게 나왔습니다)
+    return '\n'.join(parts)
 
 
 def build_link(item, stage):
