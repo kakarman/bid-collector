@@ -53,19 +53,37 @@ import pandas as pd          # 표(엑셀) 데이터를 다루는 도구
 
 # ★ 핵심 키워드 : 구체적인 장비명 (이게 걸리면 바로 영업 대상)
 CORE_KEYWORDS = [
-    # 배양·항온 계열
+    # ── 배양·항온 계열 ──────────────────────────────
     '인큐베이터',
+    'CO2인큐베이터',
     'CO2배양기',
     '배양기',
     '배양',
+    '세포배양',
+    '진탕배양',
+    '바이오리액터',
+    '발효조',
     '항온항습기',
     '항온항습',
     '항온',
     '항습',
+    '항온수조',
+    '워터배스',
     '수조',
-    '챔버',
+    '순환수조',
+    '칠러',
 
-    # 멸균·건조·가열 계열
+    # ── 챔버 계열 ──────────────────────────────────
+    '챔버',
+    '항온챔버',
+    '저온챔버',
+    '생장상',
+    '식물생장',
+    '인공기상',
+    '안정성시험',
+    '광조사',
+
+    # ── 멸균·건조·가열 계열 ────────────────────────
     '고압멸균',
     '고압증기',
     '오토클레이브',
@@ -73,39 +91,89 @@ CORE_KEYWORDS = [
     '멸균기',
     '멸균',
     '건조기',
+    '열풍건조',
+    '진공건조',
+    '동결건조',
+    '프리즈드라이',
+    '드라이오븐',
+    '진공오븐',
     '오븐',
+    '핫플레이트',
+    '가열교반',
+    '전기로',
+    '머플로',
+    '인큐베이팅',
 
-    # 냉장·냉동 계열
+    # ── 냉장·냉동 계열 ─────────────────────────────
     '초저온',
+    '초저온냉동고',
     '디프프리저',
+    '디프프리져',
+    '울트라로우',
     '냉동고',
     '냉장고',
+    '약품냉장고',
+    '의약품냉장고',
+    '혈액은행',
     '제빙기',
     '제빙',
 
-    # 전처리·분석 계열
+    # ── 전처리·분석 계열 ───────────────────────────
     '원심분리기',
+    '초고속원심',
     '진탕기',
     '쉐이커',
     '교반기',
+    '균질기',
+    '호모지나이저',
+    '볼텍스',
+    '초음파세척기',
+    '초음파분쇄',
+    '분쇄기',
     '현미경',
+    '실체현미경',
+    '형광현미경',
     '분광광도계',
+    '전자저울',
+    '분석저울',
+    '정밀저울',
+    'pH미터',
+    '수분측정',
+    '점도계',
+    '탁도계',
+    '진공펌프',
+    '초순수',
+    '순수제조',
+    '증류수제조',
+    '데시케이터',
+    '마이크로피펫',
+    '피펫',
 
-    # 클린·작업환경 계열
+    # ── 클린·작업환경 계열 ─────────────────────────
     '클린벤치',
     '클린룸',
+    '클린부스',
     '무균작업대',
+    '무균대',
+    '생물안전작업대',
+    '바이오하자드',
     '안전캐비닛',
     '흄후드',
     '작업대',
     '실험대',
+    '시약장',
+    '패스박스',
 
-    # 묶음 표현
+    # ── 묶음 표현 ──────────────────────────────────
     '실험기기',
     '실험장비',
+    '실험기자재',
+    '실험용',
     '연구장비',
     '연구기자재',
+    '연구용',
     '시험장비',
+    '시험기',
     '분석장비',
     '분석기기',
     '계측장비',
@@ -140,6 +208,25 @@ WIDE_KEYWORDS = [
     '바다',
     '클린',
     '건조',
+
+    # ── 추가 (수요기관·분야를 더 넓게 훑는 그물) ──
+    '배지',
+    '항체',
+    '백신',
+    '검체',
+    '방역',
+    '위생',
+    '축산',
+    '수산',
+    '농업',
+    '보건',
+    '병원',
+    '의약품',
+    '화장품',
+    '식품',
+    '환경측정',
+    '수질',
+    '품질검사',
 ]
 
 # 실제 검색에 쓰이는 전체 목록 (건드리지 마세요)
@@ -183,10 +270,12 @@ BUSINESS_TYPES = [
 
 # ---------------------------------------------------------------------------
 # 5) 수집 기준 시각 (매일 몇 시를 기준으로 "하루"를 자를지)
-#    - 10 이면 "어제 10:00 ~ 오늘 10:00" 입니다.
+#    - 16 이면 "어제 16:00 ~ 오늘(실행시각)" 입니다.
+#    - ★ 이 값은 반드시 '메일 받는 시각' 이하여야 합니다.
+#      (오후 4시에 받는데 이 값이 17이면 매일 1시간씩 공고가 빠집니다)
 #    - 깃허브 액션 실행 시간도 같이 바꿔야 합니다(.yml 파일의 cron 참고).
 # ---------------------------------------------------------------------------
-DAILY_CUTOFF_HOUR = 13
+DAILY_CUTOFF_HOUR = 16
 
 # ---------------------------------------------------------------------------
 # 6) 메일 제목 앞에 붙일 말머리
@@ -238,10 +327,15 @@ MAX_PAGES = 30         # 한 종류당 최대 페이지 수 (안전장치: 무�
 SLEEP_BETWEEN_CALLS = 0.3  # API 호출 사이 쉬는 시간(초) - 과부하 방지
 
 # 조달청 서버가 가끔 응답을 안 주기 때문에(우리 잘못이 아님) 자동으로 다시 시도합니다.
-CONNECT_TIMEOUT = 10   # 서버와 연결되기까지 기다리는 시간(초)
+CONNECT_TIMEOUT = 8    # 서버와 연결되기까지 기다리는 시간(초)
 READ_TIMEOUT = 60      # 연결된 뒤 데이터를 다 받을 때까지 기다리는 시간(초)
-MAX_RETRY = 3          # 통신 실패 시 다시 시도할 횟수
+MAX_RETRY = 2          # 통신 실패 시 다시 시도할 횟수
 RETRY_WAIT = 3         # 재시도 전 기다리는 시간(초). 실패할수록 2배씩 늘어납니다.
+
+# ★ 전체 수집 제한 시간 ★
+#   조달청 서버가 통째로 먹통일 때 하염없이 매달리지 않도록,
+#   이 시간이 지나면 수집을 중단하고 "지금까지 모은 것 + 경고"로 메일을 보냅니다.
+COLLECT_DEADLINE_MINUTES = 10
 
 SERVICE_KEY = ''       # 공공데이터포털 인증키 (실행할 때 Secrets 에서 채워집니다)
 
@@ -280,6 +374,8 @@ API_ENDPOINTS = {
 }
 
 # 엑셀에 넣을 열(컬럼) 순서
+# A열      B열    C열    D열        E열    F열      G열
+# 중요도 / 구분 / 업무 / 매칭키워드 / 공고명 / 수요기관 / 공고기관 ...
 COLUMNS = [
     '중요도', '구분', '업무', '매칭키워드', '공고명', '수요기관', '공고기관',
     '등록/공고일시', '사업기한(마감일)', '배정예산(원)',
@@ -296,6 +392,12 @@ DEAD_PATHS = set()          # 400/404 가 난 주소 (다시 시도하지 않음
 NETWORK_FAILS = {}          # 주소별 통신 실패 횟수
 WARNINGS = []               # 실행 중 생긴 문제 (메일 본문에 함께 알려드립니다)
 SESSION = None              # 접속을 재사용해 속도·안정성을 높이는 통신 객체
+COLLECT_DEADLINE = None     # 수집을 멈춰야 하는 시각 (main 에서 정해집니다)
+
+
+def deadline_passed():
+    """제한 시간을 넘겼는지 확인합니다."""
+    return COLLECT_DEADLINE is not None and datetime.now(KST) >= COLLECT_DEADLINE
 
 
 def add_warning(message):
@@ -320,11 +422,17 @@ def get_session():
     except ImportError:                      # 아주 오래된 환경 대비
         from requests.packages.urllib3.util.retry import Retry
 
+    # ⚠️ 여기서는 '연결 실패' 재시도를 하지 않습니다(connect=0, read=0).
+    #    아래 call_api 에서 직접 재시도하기 때문에, 여기서도 재시도하면
+    #    3 × 3 × 2 = 최대 36번을 시도하게 되어 서버가 죽었을 때
+    #    한 번의 호출에 몇 분씩 잡아먹습니다. (실제로 그 문제가 있었습니다)
+    #    일시적인 서버 오류(500·503 등)만 여기서 짧게 재시도합니다.
     retry_rule = Retry(
-        total=MAX_RETRY,
-        connect=MAX_RETRY,
-        read=2,
-        backoff_factor=1.5,                  # 1.5초 → 3초 → 6초 간격으로 재시도
+        total=2,
+        connect=0,
+        read=0,
+        status=2,
+        backoff_factor=1.0,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=frozenset(['GET']),
         raise_on_status=False,
@@ -444,8 +552,12 @@ def call_api(path, params, page_size):
     # https → http 순서로, 각각 여러 번 시도합니다.
     # (조달청 서버는 접속이 몰리면 응답을 아예 안 주는 경우가 있습니다)
     for scheme in API_SCHEMES:
+        if deadline_passed():
+            break
         url = f'{scheme}://{API_HOST}/{path}'
         for attempt in range(1, MAX_RETRY + 1):
+            if deadline_passed():
+                break
             try:
                 response = get_session().get(
                     url, params=query, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
@@ -531,6 +643,8 @@ def fetch_all(path, start_dt, end_dt):
     page_size = PAGE_SIZE
 
     for page_no in range(1, MAX_PAGES + 1):
+        if deadline_passed():
+            break
         params = {
             'serviceKey': SERVICE_KEY,
             'pageNo': page_no,
@@ -568,6 +682,10 @@ def fetch_with_fallback(stage, biz_type, start_dt, end_dt):
     """
     # 이미 "이 서비스는 주소 자체가 없다"고 판명된 단계는 조용히 건너뜁니다.
     if stage in UNAVAILABLE_STAGES:
+        return []
+
+    # 제한 시간을 넘겼으면 더 시도하지 않습니다.
+    if deadline_passed():
         return []
 
     all_paths = API_ENDPOINTS.get(stage, {}).get(biz_type, [])
@@ -855,7 +973,6 @@ def make_excel(df, file_path, start_dt, end_dt):
             '등록/공고일시': 18, '사업기한(마감일)': 18, '배정예산(원)': 16,
             '사업내용요약': 60, '공고번호': 18, '공고링크': 35,
         }
-     
         for idx, column_name in enumerate(df.columns, start=1):
             sheet.column_dimensions[get_column_letter(idx)].width = widths.get(column_name, 18)
 
@@ -916,7 +1033,8 @@ def make_excel(df, file_path, start_dt, end_dt):
         # --- 필터 + 틀 고정 ---
         last_col_letter = get_column_letter(len(columns))
         sheet.auto_filter.ref = f'A2:{last_col_letter}{len(df) + 2}'
-        sheet.freeze_panes = 'E3'   # 중요도/구분/업무 열은 스크롤해도 항상 보이게
+        # 중요도/구분/업무/매칭키워드(A~D열)는 오른쪽으로 스크롤해도 항상 보이게
+        sheet.freeze_panes = 'E3'
 
     return file_path
 
@@ -1047,14 +1165,17 @@ def send_email(subject, html_body, attachment_path=None):
         server.login(sender, password.replace(' ', ''))
         server.send_message(message)
 
-    log(f'📧 메일 발송 완료 → 수신자 {len(receiver_list)}명')
+    log(f'📧 메일 발송 완료 → {", ".join(receiver_list)}')
 
 
 # -----------------------------------------------------------------------------
 # [메인] 실제 실행 순서
 # -----------------------------------------------------------------------------
 def main():
-    global SERVICE_KEY
+    global SERVICE_KEY, COLLECT_DEADLINE
+
+    # 조달청 서버가 먹통일 때 무한정 매달리지 않도록 마감 시각을 정해둡니다.
+    COLLECT_DEADLINE = datetime.now(KST) + timedelta(minutes=COLLECT_DEADLINE_MINUTES)
 
     log('=' * 60)
     log('나라장터 입찰정보 자동 수집을 시작합니다.')
@@ -1108,6 +1229,12 @@ def main():
                 row = parse_item(item, stage, biz_type)
                 if row:
                     rows.append(row)
+
+    if deadline_passed():
+        log(f'⏱ 제한 시간({COLLECT_DEADLINE_MINUTES}분)을 넘겨 수집을 중단했습니다.')
+        add_warning(
+            f'조달청 서버 응답이 없어 {COLLECT_DEADLINE_MINUTES}분 만에 수집을 중단했습니다. '
+            '일부가 누락됐을 수 있으니, 잠시 뒤 수동 실행(lookback_days=2)을 권합니다.')
 
     log(f'📊 전체 수신 {raw_total}건 → 키워드 일치 {len(rows)}건')
     if WARNINGS:
