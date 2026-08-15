@@ -278,6 +278,27 @@ BUSINESS_TYPES = [
 DAILY_CUTOFF_HOUR = 16
 
 # ---------------------------------------------------------------------------
+# 5-2) 수집 방식  ★중요★
+#
+#   '진행중' : 최근 며칠간 올라온 공고 중 "아직 마감되지 않은 것"을 모두 수집
+#              → 매일 받아도 응찰 가능한 건 전부 보입니다 (영업용 권장)
+#   '신규'   : 어제 이 시각 이후 새로 올라온 것만 수집 (예전 방식)
+# ---------------------------------------------------------------------------
+COLLECT_MODE = '진행중'
+
+# '진행중' 모드에서 며칠 전 공고까지 훑을지
+#   - 14일이면 대부분의 물품·용역 공고를 덮습니다 (보통 공고~마감이 7~15일)
+#   - 늘릴수록 결과가 많아지고 수집 시간도 길어집니다 (30일 이상은 권장하지 않음)
+OPEN_LOOKBACK_DAYS = 14
+
+# 마감일이 이미 지난 공고를 결과에서 뺄지 여부
+HIDE_CLOSED = True
+
+# 배정예산이 이 금액 미만이면 제외 (0 이면 제한 없음)
+#   예) 5000000 → 500만원 미만 소액 건은 안 보임
+MIN_BUDGET = 0
+
+# ---------------------------------------------------------------------------
 # 6) 메일 제목 앞에 붙일 말머리
 # ---------------------------------------------------------------------------
 MAIL_SUBJECT_PREFIX = '[나라장터 입찰정보]'
@@ -323,7 +344,7 @@ KST = timezone(timedelta(hours=9))          # 한국 표준시(UTC+9)
 API_HOST = 'apis.data.go.kr/1230000'        # 조달청 Open API 공통 주소
 API_SCHEMES = ['https', 'http']             # https 우선, 안 되면 http로 재시도
 PAGE_SIZE = 500        # 한 번 요청할 때 가져올 건수 (너무 크면 실패할 수 있어 500)
-MAX_PAGES = 30         # 한 종류당 최대 페이지 수 (안전장치: 무한루프 방지)
+MAX_PAGES = 60         # 한 종류당 최대 페이지 수 (안전장치: 무한루프 방지)
 SLEEP_BETWEEN_CALLS = 0.3  # API 호출 사이 쉬는 시간(초) - 과부하 방지
 
 # 조달청 서버가 가끔 응답을 안 주기 때문에(우리 잘못이 아님) 자동으로 다시 시도합니다.
@@ -377,8 +398,8 @@ API_ENDPOINTS = {
 # A열      B열    C열    D열        E열    F열      G열
 # 중요도 / 구분 / 업무 / 매칭키워드 / 공고명 / 수요기관 / 공고기관 ...
 COLUMNS = [
-    '중요도', '구분', '업무', '매칭키워드', '공고명', '수요기관', '공고기관',
-    '등록/공고일시', '사업기한(마감일)', '배정예산(원)',
+    '중요도', '신규', '구분', '업무', '매칭키워드', '공고명', '수요기관', '공고기관',
+    '등록/공고일시', '사업기한(마감일)', 'D-day', '배정예산(원)',
     '사업내용요약', '공고번호', '공고링크',
 ]
 
@@ -493,6 +514,13 @@ def calc_period(now=None, lookback_days=0):
     # (1) 수동 실행에서 "최근 N일" 을 지정한 경우 → 그 값을 최우선으로 사용
     if lookback_days and lookback_days > 0:
         start_dt = (now - timedelta(days=lookback_days)).replace(
+            hour=DAILY_CUTOFF_HOUR, minute=0, second=0, microsecond=0)
+        return start_dt, end_dt
+
+    # (1-2) '진행중' 모드 → 최근 OPEN_LOOKBACK_DAYS 일치를 통째로 훑습니다.
+    #       (그 중 마감 안 된 것만 나중에 골라냅니다)
+    if COLLECT_MODE == '진행중':
+        start_dt = (now - timedelta(days=OPEN_LOOKBACK_DAYS)).replace(
             hour=DAILY_CUTOFF_HOUR, minute=0, second=0, microsecond=0)
         return start_dt, end_dt
 
@@ -802,6 +830,33 @@ def fmt_datetime_text(text):
     return str(text or '').strip()
 
 
+def parse_dt(text):
+    """'2026-08-20 10:00' 같은 글자를 날짜로 바꿉니다. 못 바꾸면 None."""
+    digits = re.sub(r'\D', '', str(text or ''))
+    try:
+        if len(digits) >= 12:
+            return datetime.strptime(digits[:12], '%Y%m%d%H%M').replace(tzinfo=KST)
+        if len(digits) >= 8:
+            # 시각이 없으면 그날 23:59 로 봅니다 (그날까지는 유효하다고 판단)
+            return datetime.strptime(digits[:8], '%Y%m%d').replace(
+                hour=23, minute=59, tzinfo=KST)
+    except Exception:
+        pass
+    return None
+
+
+def calc_dday(close_dt, now):
+    """마감까지 남은 일수를 'D-3' 형태로. 오늘 마감이면 'D-day'."""
+    if close_dt is None:
+        return ''
+    days = (close_dt.date() - now.date()).days
+    if days < 0:
+        return f'마감({-days}일 지남)'
+    if days == 0:
+        return 'D-day'
+    return f'D-{days}'
+
+
 def to_amount(text):
     """'1,200,000원' 같은 값을 숫자 1200000 으로 바꿔줍니다. 못 바꾸면 빈칸."""
     digits = re.sub(r'[^\d]', '', str(text or ''))
@@ -879,8 +934,10 @@ def build_link(item, stage):
     return url
 
 
-def parse_item(item, stage, biz_type):
+def parse_item(item, stage, biz_type, now=None, new_since=None):
     """API 응답 한 건(item)을 엑셀 한 줄(dict)로 바꿉니다."""
+    if now is None:
+        now = datetime.now(KST)
     title = pick(item, [
         'bidNtceNm',            # 본공고: 공고명
         'prdctClsfcNoNm',       # 사전규격: 품명
@@ -897,28 +954,51 @@ def parse_item(item, stage, biz_type):
     if not hits:
         return None     # 키워드에 안 걸리면 버립니다.
 
+    # ── 등록일시 / 마감일시를 날짜로 해석 ──
+    posted_text = pick(item, [
+        'bidNtceDt', 'rgstDt', 'rcptDt', 'bfSpecRgstDt', 'orderPlanRgstDt',
+    ])
+    close_text = pick(item, [
+        'bidClseDt',            # 본공고 입찰마감일시
+        'opninRgstClseDt',      # 사전규격 의견등록 마감
+        'opengDt',              # 개찰일시
+        'bidBeginDt',
+        'orderPlanDt', 'ordrPlanMt',
+    ])
+    posted_dt = parse_dt(posted_text)
+    close_dt = parse_dt(close_text)
+
+    # ── 마감된 공고 제외 ──
+    #    (마감일 정보가 아예 없는 건은 판단할 수 없으므로 그대로 남깁니다)
+    if HIDE_CLOSED and close_dt is not None and close_dt < now:
+        return None
+
+    # ── 배정예산 하한 필터 ──
+    budget = to_amount(pick(item, [
+        'asignBdgtAmt',         # 배정예산액
+        'presmptPrce',          # 추정가격
+        'bdgtAmt', 'sumOfBdgt', 'orderPlanAmt', 'budgetAmount',
+    ]))
+    if MIN_BUDGET and isinstance(budget, int) and budget < MIN_BUDGET:
+        return None
+
+    # ── 오늘 새로 올라온 건인지 표시 ──
+    is_new = ''
+    if new_since is not None and posted_dt is not None and posted_dt >= new_since:
+        is_new = '🆕 신규'
+
     row = {
         '중요도': decide_level(hits),
+        '신규': is_new,
         '구분': stage,
         '업무': biz_type,
         '공고명': title,
         '수요기관': org,
         '공고기관': pick(item, ['ntceInsttNm', 'orderInsttNm', 'insttNm']),
-        '등록/공고일시': fmt_datetime_text(pick(item, [
-            'bidNtceDt', 'rgstDt', 'rcptDt', 'bfSpecRgstDt', 'orderPlanRgstDt',
-        ])),
-        '사업기한(마감일)': fmt_datetime_text(pick(item, [
-            'bidClseDt',            # 본공고 입찰마감일시
-            'opninRgstClseDt',      # 사전규격 의견등록 마감
-            'opengDt',              # 개찰일시
-            'bidBeginDt',
-            'orderPlanDt', 'ordrPlanMt',
-        ])),
-        '배정예산(원)': to_amount(pick(item, [
-            'asignBdgtAmt',         # 배정예산액
-            'presmptPrce',          # 추정가격
-            'bdgtAmt', 'sumOfBdgt', 'orderPlanAmt', 'budgetAmount',
-        ])),
+        '등록/공고일시': fmt_datetime_text(posted_text),
+        '사업기한(마감일)': fmt_datetime_text(close_text),
+        'D-day': calc_dday(close_dt, now),
+        '배정예산(원)': budget,
         '사업내용요약': summary,
         '매칭키워드': ', '.join(hits),
         '공고번호': pick(item, [
@@ -968,9 +1048,10 @@ def make_excel(df, file_path, start_dt, end_dt):
 
         # --- 열 너비 지정 ---
         widths = {
-            '중요도': 9, '구분': 10, '업무': 8, '매칭키워드': 26,
+            '중요도': 9, '신규': 9, '구분': 10, '업무': 8, '매칭키워드': 26,
             '공고명': 55, '수요기관': 22, '공고기관': 22,
-            '등록/공고일시': 18, '사업기한(마감일)': 18, '배정예산(원)': 16,
+            '등록/공고일시': 18, '사업기한(마감일)': 18, 'D-day': 10,
+            '배정예산(원)': 16,
             '사업내용요약': 60, '공고번호': 18, '공고링크': 35,
         }
         for idx, column_name in enumerate(df.columns, start=1):
@@ -982,6 +1063,8 @@ def make_excel(df, file_path, start_dt, end_dt):
         link_col = columns.index('공고링크') + 1 if '공고링크' in columns else None
         stage_col = columns.index('구분') + 1 if '구분' in columns else None
         level_col = columns.index('중요도') + 1 if '중요도' in columns else None
+        new_col = columns.index('신규') + 1 if '신규' in columns else None
+        dday_col = columns.index('D-day') + 1 if 'D-day' in columns else None
 
         stage_colors = {
             '사업계획': 'FFF2CC',   # 연노랑
@@ -1018,6 +1101,22 @@ def make_excel(df, file_path, start_dt, end_dt):
                     level_cell.font = Font(size=10, color='808080')
                 level_cell.alignment = Alignment(horizontal='center', vertical='top')
 
+            if new_col:
+                new_cell = sheet.cell(row=row_idx, column=new_col)
+                if str(new_cell.value or '').strip():
+                    new_cell.fill = PatternFill('solid', fgColor='FCE4D6')  # 연주황
+                    new_cell.font = Font(size=10, bold=True, color='C00000')
+                new_cell.alignment = Alignment(horizontal='center', vertical='top')
+
+            if dday_col:
+                dday_cell = sheet.cell(row=row_idx, column=dday_col)
+                text = str(dday_cell.value or '')
+                # D-3 이내면 빨간 굵은 글씨로 강조 (마감 임박)
+                match = re.match(r'D-(\d+)$', text)
+                if text == 'D-day' or (match and int(match.group(1)) <= 3):
+                    dday_cell.font = Font(size=10, bold=True, color='C00000')
+                dday_cell.alignment = Alignment(horizontal='center', vertical='top')
+
             if link_col:
                 link_cell = sheet.cell(row=row_idx, column=link_col)
                 url = str(link_cell.value or '').strip()
@@ -1034,7 +1133,7 @@ def make_excel(df, file_path, start_dt, end_dt):
         last_col_letter = get_column_letter(len(columns))
         sheet.auto_filter.ref = f'A2:{last_col_letter}{len(df) + 2}'
         # 중요도/구분/업무/매칭키워드(A~D열)는 오른쪽으로 스크롤해도 항상 보이게
-        sheet.freeze_panes = 'E3'
+        sheet.freeze_panes = 'F3'
 
     return file_path
 
@@ -1079,6 +1178,7 @@ def build_mail_body(df, start_dt, end_dt):
     summary_line = ' / '.join(f'{k} {v}건' for k, v in counts.items())
     core_df = df[df['중요도'] == LEVEL_CORE]
     core_count = len(core_df)
+    new_count = int(df['신규'].apply(lambda v: bool(str(v).strip())).sum())
 
     # 메일 본문에는 ★핵심 건만 보여줍니다. (핵심이 없으면 전체에서 상위 30건)
     preview_df = core_df if core_count else df
@@ -1089,11 +1189,17 @@ def build_mail_body(df, start_dt, end_dt):
         budget_text = f'{budget:,}' if isinstance(budget, int) else '-'
         link = str(row['공고링크'] or '')
         link_html = f'<a href="{link}">보기</a>' if link.startswith('http') else '-'
+        dday = str(row['D-day'] or '')
+        dday_style = ('color:#c00;font-weight:bold;'
+                      if dday == 'D-day' or re.match(r'D-[0-3]$', dday) else '')
+        new_mark = ('<span style="color:#c00;font-weight:bold;">🆕</span> '
+                    if str(row['신규']).strip() else '')
         rows_html += f"""
           <tr>
             <td style="border:1px solid #ddd;padding:6px;white-space:nowrap;">{row['구분']}</td>
-            <td style="border:1px solid #ddd;padding:6px;">{row['공고명']}</td>
+            <td style="border:1px solid #ddd;padding:6px;">{new_mark}{row['공고명']}</td>
             <td style="border:1px solid #ddd;padding:6px;white-space:nowrap;">{row['사업기한(마감일)'] or '-'}</td>
+            <td style="border:1px solid #ddd;padding:6px;text-align:center;white-space:nowrap;{dday_style}">{dday or '-'}</td>
             <td style="border:1px solid #ddd;padding:6px;text-align:right;white-space:nowrap;">{budget_text}</td>
             <td style="border:1px solid #ddd;padding:6px;text-align:center;">{link_html}</td>
           </tr>"""
@@ -1106,9 +1212,12 @@ def build_mail_body(df, start_dt, end_dt):
     <div style="font-family:'맑은 고딕',sans-serif;font-size:14px;">
       <p>안녕하세요. 나라장터 입찰정보 자동수집 결과입니다.</p>
       {warning_html()}
-      <p><b>수집기간:</b> {period_text}<br>
+      <p><b>수집기준:</b> {COLLECT_MODE}
+         {f'(최근 {OPEN_LOOKBACK_DAYS}일 공고 중 마감 전인 것)' if COLLECT_MODE == '진행중' else ''}<br>
+         <b>수집기간:</b> {period_text}<br>
          <b>총 건수:</b> {len(df)}건
-         (<b style="color:#c55a11;">★핵심 {core_count}건</b> / 참고 {len(df) - core_count}건)<br>
+         (<b style="color:#c55a11;">★핵심 {core_count}건</b> / 참고 {len(df) - core_count}건)
+         &nbsp;|&nbsp; <b style="color:#c00;">🆕 오늘 신규 {new_count}건</b><br>
          <b>단계별:</b> {summary_line}</p>
       <p style="margin-bottom:4px;"><b>
         {'★핵심 공고 미리보기' if core_count else '수집 결과 미리보기'}
@@ -1119,6 +1228,7 @@ def build_mail_body(df, start_dt, end_dt):
             <th style="border:1px solid #ddd;padding:6px;">구분</th>
             <th style="border:1px solid #ddd;padding:6px;">공고명</th>
             <th style="border:1px solid #ddd;padding:6px;">사업기한</th>
+            <th style="border:1px solid #ddd;padding:6px;">D-day</th>
             <th style="border:1px solid #ddd;padding:6px;">배정예산(원)</th>
             <th style="border:1px solid #ddd;padding:6px;">링크</th>
           </tr>
@@ -1192,10 +1302,19 @@ def main():
         lookback_days = 0
 
     start_dt, end_dt = calc_period(lookback_days=lookback_days)
+
+    # '어제 이 시각' 이후 올라온 건은 🆕 신규 로 표시합니다.
+    new_since = (end_dt - timedelta(days=3 if end_dt.weekday() == 0 else 1)).replace(
+        hour=DAILY_CUTOFF_HOUR, minute=0, second=0, microsecond=0)
+
     log(f'🗓  수집기간: {start_dt.strftime("%Y-%m-%d(%a) %H:%M")} '
         f'~ {end_dt.strftime("%Y-%m-%d(%a) %H:%M")}')
+    log(f'⚙️  수집방식: {COLLECT_MODE}'
+        + (f' (최근 {OPEN_LOOKBACK_DAYS}일 공고 중 마감 전인 것만)'
+           if COLLECT_MODE == '진행중' else '')
+        + f' | 🆕 신규 기준: {new_since.strftime("%m-%d %H:%M")} 이후')
     if end_dt.weekday() == 0 and not lookback_days:
-        log('   (월요일이므로 금·토·일 공고까지 함께 수집합니다)')
+        log('   (월요일이므로 금·토·일 공고까지 신규로 봅니다)')
 
     # (2) 단계별로 데이터 수집
     rows = []
@@ -1226,7 +1345,8 @@ def main():
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                row = parse_item(item, stage, biz_type)
+                row = parse_item(item, stage, biz_type,
+                                 now=end_dt, new_since=new_since)
                 if row:
                     rows.append(row)
 
@@ -1249,13 +1369,15 @@ def main():
         # ★핵심을 맨 위로 올리고,
         # 그 안에서 진행 단계(사업계획 → 사전규격 → 본공고),
         # 다시 그 안에서 최신 공고 순으로 정렬합니다.
-        stage_order = {'사업계획': 0, '사전규격': 1, '본공고': 2}
         level_order = {LEVEL_CORE: 0, LEVEL_WIDE: 1}
         df['_중요'] = df['중요도'].map(level_order).fillna(9)
-        df['_순서'] = df['구분'].map(stage_order).fillna(9)
+        df['_신규'] = df['신규'].apply(lambda v: 0 if str(v).strip() else 1)
+        # 마감이 임박한 순서로 (마감일 없는 건은 맨 뒤)
+        df['_마감'] = df['사업기한(마감일)'].apply(
+            lambda t: (parse_dt(t) or datetime(2099, 1, 1, tzinfo=KST)))
         df = df.sort_values(
-            by=['_중요', '_순서', '등록/공고일시'], ascending=[True, True, False]
-        ).drop(columns=['_중요', '_순서']).reset_index(drop=True)
+            by=['_중요', '_신규', '_마감'], ascending=[True, True, True]
+        ).drop(columns=['_중요', '_신규', '_마감']).reset_index(drop=True)
     else:
         df = pd.DataFrame(columns=COLUMNS)
 
@@ -1271,8 +1393,10 @@ def main():
 
     # (5) 메일 발송
     core_count = int((df['중요도'] == LEVEL_CORE).sum()) if not df.empty else 0
+    new_count = (int(df['신규'].apply(lambda v: bool(str(v).strip())).sum())
+                 if not df.empty else 0)
     subject = (f'{MAIL_SUBJECT_PREFIX} {end_dt.strftime("%m월 %d일")} '
-               f'★핵심 {core_count}건 / 전체 {len(df)}건')
+               f'🆕신규 {new_count} / ★핵심 {core_count} / 전체 {len(df)}건')
     body = build_mail_body(df, start_dt, end_dt)
     send_email(subject, body, attachment)
 
