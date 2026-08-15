@@ -343,20 +343,26 @@ DEBUG_SHOW_FIELDS = False
 KST = timezone(timedelta(hours=9))          # 한국 표준시(UTC+9)
 API_HOST = 'apis.data.go.kr/1230000'        # 조달청 Open API 공통 주소
 API_SCHEMES = ['https', 'http']             # https 우선, 안 되면 http로 재시도
-PAGE_SIZE = 500        # 한 번 요청할 때 가져올 건수 (너무 크면 실패할 수 있어 500)
-MAX_PAGES = 60         # 한 종류당 최대 페이지 수 (안전장치: 무한루프 방지)
+PAGE_SIZE = 300        # 한 번 요청할 때 가져올 건수
+MAX_PAGES = 40         # 한 구간당 최대 페이지 수 (안전장치: 무한루프 방지)
+
+# ★ 조회 기간 쪼개기 ★
+#   나라장터 API는 조회 기간이 길면 서버가 응답을 포기하고 연결을 끊어버립니다.
+#   그래서 14일치가 필요해도 '하루씩 14번' 나눠서 요청합니다.
+#   (요청 횟수는 늘지만 하나하나가 가벼워서 훨씬 안정적입니다)
+CHUNK_DAYS = 1
 SLEEP_BETWEEN_CALLS = 0.3  # API 호출 사이 쉬는 시간(초) - 과부하 방지
 
 # 조달청 서버가 가끔 응답을 안 주기 때문에(우리 잘못이 아님) 자동으로 다시 시도합니다.
 CONNECT_TIMEOUT = 8    # 서버와 연결되기까지 기다리는 시간(초)
-READ_TIMEOUT = 60      # 연결된 뒤 데이터를 다 받을 때까지 기다리는 시간(초)
+READ_TIMEOUT = 90      # 연결된 뒤 데이터를 다 받을 때까지 기다리는 시간(초)
 MAX_RETRY = 2          # 통신 실패 시 다시 시도할 횟수
 RETRY_WAIT = 3         # 재시도 전 기다리는 시간(초). 실패할수록 2배씩 늘어납니다.
 
 # ★ 전체 수집 제한 시간 ★
 #   조달청 서버가 통째로 먹통일 때 하염없이 매달리지 않도록,
 #   이 시간이 지나면 수집을 중단하고 "지금까지 모은 것 + 경고"로 메일을 보냅니다.
-COLLECT_DEADLINE_MINUTES = 10
+COLLECT_DEADLINE_MINUTES = 20
 
 SERVICE_KEY = ''       # 공공데이터포털 인증키 (실행할 때 Secrets 에서 채워집니다)
 
@@ -608,9 +614,9 @@ def call_api(path, params, page_size):
         NETWORK_FAILS[path] = fails
         reason = type(last_error).__name__ if last_error else '알 수 없음'
         log(f'   ⚠️ 통신 실패({op_name}) - {reason}. 조달청 서버 응답 없음.')
-        if fails >= 2:
+        if fails >= 3:
             DEAD_PATHS.add(path)
-            add_warning(f'{op_name}: 조달청 서버 접속 실패로 이번 회차는 건너뛰었습니다.')
+            add_warning(f'{op_name}: 조달청 서버 접속 실패({reason})로 건너뛰었습니다.')
         return None
 
     if response.status_code != 200:
@@ -662,9 +668,9 @@ def extract_items(data):
     return items, total
 
 
-def fetch_all(path, start_dt, end_dt):
+def fetch_window(path, start_dt, end_dt):
     """
-    한 종류(예: 본공고-물품)의 데이터를 기간 내 전부 가져옵니다.
+    한 종류(예: 본공고-물품)를 '짧은 기간 하나'에 대해 가져옵니다.
     페이지를 넘겨가며(1페이지, 2페이지 ...) 끝까지 수집합니다.
     """
     collected = []
@@ -703,6 +709,36 @@ def fetch_all(path, start_dt, end_dt):
     return collected
 
 
+def fetch_all(path, start_dt, end_dt):
+    """
+    전체 기간을 CHUNK_DAYS 일씩 잘라서 여러 번 나눠 가져옵니다.
+
+    ※ 왜 나누는가?
+       나라장터 API에 "14일치 다 줘" 라고 하면 서버가 감당을 못 하고
+       응답 없이 연결을 끊어버립니다(ConnectTimeout/ReadTimeout).
+       하루씩 나눠 요청하면 하나하나가 가벼워서 안정적으로 받아옵니다.
+    """
+    collected = []
+    chunk_start = start_dt
+    chunk_no = 0
+    span = timedelta(days=max(1, CHUNK_DAYS))
+
+    while chunk_start < end_dt:
+        if deadline_passed():
+            break
+        chunk_end = min(chunk_start + span, end_dt)
+        chunk_no += 1
+
+        items = fetch_window(path, chunk_start, chunk_end)
+        collected.extend(items)
+
+        chunk_start = chunk_end
+        if chunk_start < end_dt:
+            time.sleep(SLEEP_BETWEEN_CALLS)
+
+    return collected
+
+
 def fetch_with_fallback(stage, biz_type, start_dt, end_dt):
     """
     한 단계·업무구분에 대해 주소 후보를 차례로 시도해서
@@ -719,11 +755,13 @@ def fetch_with_fallback(stage, biz_type, start_dt, end_dt):
     all_paths = API_ENDPOINTS.get(stage, {}).get(biz_type, [])
     paths = [p for p in all_paths if p not in DEAD_PATHS]
 
+    days = max(1, (end_dt - start_dt).days)
     items = []
     for path in paths:
         items = fetch_all(path, start_dt, end_dt)
         if items:
-            log(f'   ✅ {stage}-{biz_type}: {len(items)}건 수신 ({path.split("/")[-1]})')
+            log(f'   ✅ {stage}-{biz_type}: {len(items)}건 수신 '
+                f'({days}일치를 {CHUNK_DAYS}일씩 나눠 조회, {path.split("/")[-1]})')
             return items
 
     # 이 단계에 등록된 모든 주소가 "없는 주소"로 판명되면 단계 전체를 접습니다.
