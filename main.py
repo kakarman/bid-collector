@@ -275,7 +275,7 @@ BUSINESS_TYPES = [
 #      (오후 4시에 받는데 이 값이 17이면 매일 1시간씩 공고가 빠집니다)
 #    - 깃허브 액션 실행 시간도 같이 바꿔야 합니다(.yml 파일의 cron 참고).
 # ---------------------------------------------------------------------------
-DAILY_CUTOFF_HOUR = 15
+DAILY_CUTOFF_HOUR = 16
 
 # ---------------------------------------------------------------------------
 # 5-2) 수집 방식  ★중요★
@@ -289,7 +289,7 @@ COLLECT_MODE = '진행중'
 # '진행중' 모드에서 며칠 전 공고까지 훑을지
 #   - 14일이면 대부분의 물품·용역 공고를 덮습니다 (보통 공고~마감이 7~15일)
 #   - 늘릴수록 결과가 많아지고 수집 시간도 길어집니다 (30일 이상은 권장하지 않음)
-OPEN_LOOKBACK_DAYS = 14
+OPEN_LOOKBACK_DAYS = 7
 
 # 마감일이 이미 지난 공고를 결과에서 뺄지 여부
 HIDE_CLOSED = True
@@ -354,7 +354,7 @@ CHUNK_DAYS = 1
 SLEEP_BETWEEN_CALLS = 0.3  # API 호출 사이 쉬는 시간(초) - 과부하 방지
 
 # 조달청 서버가 가끔 응답을 안 주기 때문에(우리 잘못이 아님) 자동으로 다시 시도합니다.
-CONNECT_TIMEOUT = 8    # 서버와 연결되기까지 기다리는 시간(초)
+CONNECT_TIMEOUT = 6    # 서버와 연결되기까지 기다리는 시간(초)
 READ_TIMEOUT = 90      # 연결된 뒤 데이터를 다 받을 때까지 기다리는 시간(초)
 MAX_RETRY = 2          # 통신 실패 시 다시 시도할 횟수
 RETRY_WAIT = 3         # 재시도 전 기다리는 시간(초). 실패할수록 2배씩 늘어납니다.
@@ -421,9 +421,19 @@ WARNINGS = []               # 실행 중 생긴 문제 (메일 본문에 함께 
 SESSION = None              # 접속을 재사용해 속도·안정성을 높이는 통신 객체
 COLLECT_DEADLINE = None     # 수집을 멈춰야 하는 시각 (main 에서 정해집니다)
 
+# ★ 조달청 API 전체 불통 감지 ★
+#   서로 다른 주소들이 연달아 계속 실패하면 "조달청 전체가 먹통"으로 보고
+#   시간 낭비 없이 즉시 중단합니다. (한 번이라도 성공하면 0으로 초기화)
+CONSECUTIVE_FAILS = 0
+OUTAGE_LIMIT = 6            # 연속 실패가 이 횟수를 넘으면 전체 불통으로 판단
+OUTAGE = False
+COLLECT_FAILED = False      # 수집 자체가 실패했는지 (0건 vs 통신실패 구분용)
+
 
 def deadline_passed():
-    """제한 시간을 넘겼는지 확인합니다."""
+    """제한 시간을 넘겼거나, 조달청 전체가 먹통이면 True."""
+    if OUTAGE:
+        return True
     return COLLECT_DEADLINE is not None and datetime.now(KST) >= COLLECT_DEADLINE
 
 
@@ -575,6 +585,14 @@ def call_api(path, params, page_size):
     조달청 API를 1회 호출하고 결과(JSON)를 돌려줍니다.
     실패하면 None 을 돌려주고, 이유를 로그에 남깁니다.
     """
+    global CONSECUTIVE_FAILS, OUTAGE
+
+    # ★ 이미 "죽은 주소"로 판명된 곳은 네트워크를 건드리지도 않고 즉시 포기합니다.
+    #   (예전에는 이 확인이 없어서, 죽은 주소 하나가 하루씩 쪼갠 요청을 계속
+    #    재시도하며 제한 시간을 전부 써버리고 나머지 주소는 시도조차 못 했습니다)
+    if path in DEAD_PATHS or deadline_passed():
+        return None
+
     query = dict(params)
     query['numOfRows'] = page_size
     query['type'] = 'json'
@@ -614,10 +632,24 @@ def call_api(path, params, page_size):
         NETWORK_FAILS[path] = fails
         reason = type(last_error).__name__ if last_error else '알 수 없음'
         log(f'   ⚠️ 통신 실패({op_name}) - {reason}. 조달청 서버 응답 없음.')
-        if fails >= 3:
+
+        # 이 주소는 2번 실패하면 이번 실행에서 완전히 포기합니다.
+        if fails >= 2:
             DEAD_PATHS.add(path)
             add_warning(f'{op_name}: 조달청 서버 접속 실패({reason})로 건너뛰었습니다.')
+
+        # 서로 다른 주소들이 연달아 실패 → 조달청 전체 불통으로 판단하고 즉시 중단
+        CONSECUTIVE_FAILS += 1
+        if CONSECUTIVE_FAILS >= OUTAGE_LIMIT and not OUTAGE:
+            OUTAGE = True
+            log(f'   🛑 연속 {CONSECUTIVE_FAILS}회 실패 → 조달청 API 전체 불통으로 '
+                f'판단하고 수집을 중단합니다.')
+            add_warning('조달청 Open API 전체가 응답하지 않아 수집을 중단했습니다. '
+                        '(조달청 서버 장애로 보입니다)')
         return None
+
+    # 성공했으므로 연속 실패 기록을 초기화합니다.
+    CONSECUTIVE_FAILS = 0
 
     if response.status_code != 200:
         # 400/404 는 대부분 "그 주소의 서비스가 없다"는 뜻이므로
@@ -677,7 +709,7 @@ def fetch_window(path, start_dt, end_dt):
     page_size = PAGE_SIZE
 
     for page_no in range(1, MAX_PAGES + 1):
-        if deadline_passed():
+        if deadline_passed() or path in DEAD_PATHS:
             break
         params = {
             'serviceKey': SERVICE_KEY,
@@ -724,7 +756,8 @@ def fetch_all(path, start_dt, end_dt):
     span = timedelta(days=max(1, CHUNK_DAYS))
 
     while chunk_start < end_dt:
-        if deadline_passed():
+        # 제한 시간을 넘겼거나, 이 주소가 죽은 것으로 판명되면 즉시 중단
+        if deadline_passed() or path in DEAD_PATHS:
             break
         chunk_end = min(chunk_start + span, end_dt)
         chunk_no += 1
@@ -1209,7 +1242,12 @@ def build_mail_body(df, start_dt, end_dt):
           <p>안녕하세요. 나라장터 입찰정보 자동수집 결과입니다.</p>
           {warning_html()}
           <p><b>수집기간:</b> {period_text}</p>
-          <p style="color:#c00;"><b>해당 기간에 키워드와 일치하는 신규 공고가 없습니다.</b></p>
+          <p style="color:#c00;"><b>{
+            '조달청 서버에서 자료를 한 건도 받아오지 못했습니다. '
+            '(키워드 문제가 아니라 통신 실패입니다)'
+            if COLLECT_FAILED else
+            '해당 기간에 키워드와 일치하는 공고가 없습니다.'
+          }</b></p>
         </div>
         """
 
@@ -1322,7 +1360,7 @@ def send_email(subject, html_body, attachment_path=None):
 # [메인] 실제 실행 순서
 # -----------------------------------------------------------------------------
 def main():
-    global SERVICE_KEY, COLLECT_DEADLINE
+    global SERVICE_KEY, COLLECT_DEADLINE, COLLECT_FAILED
 
     # 조달청 서버가 먹통일 때 무한정 매달리지 않도록 마감 시각을 정해둡니다.
     COLLECT_DEADLINE = datetime.now(KST) + timedelta(minutes=COLLECT_DEADLINE_MINUTES)
@@ -1390,11 +1428,17 @@ def main():
                 if row:
                     rows.append(row)
 
-    if deadline_passed():
+    # 시간 초과로 멈춘 경우에만 안내 (전체 불통은 이미 별도 경고가 붙습니다)
+    if not OUTAGE and COLLECT_DEADLINE and datetime.now(KST) >= COLLECT_DEADLINE:
         log(f'⏱ 제한 시간({COLLECT_DEADLINE_MINUTES}분)을 넘겨 수집을 중단했습니다.')
         add_warning(
-            f'조달청 서버 응답이 없어 {COLLECT_DEADLINE_MINUTES}분 만에 수집을 중단했습니다. '
-            '일부가 누락됐을 수 있으니, 잠시 뒤 수동 실행(lookback_days=2)을 권합니다.')
+            f'조달청 서버가 느려 {COLLECT_DEADLINE_MINUTES}분 만에 수집을 중단했습니다. '
+            '일부가 누락됐을 수 있으니, 잠시 뒤 수동 실행을 권합니다.')
+
+    # 한 건도 못 받았는데 경고가 있다면 = 키워드 문제가 아니라 통신 실패
+    if raw_total == 0 and WARNINGS:
+        COLLECT_FAILED = True
+        log('❗ 조달청에서 자료를 한 건도 받아오지 못했습니다 (통신 실패)')
 
     log(f'📊 전체 수신 {raw_total}건 → 키워드 일치 {len(rows)}건')
     if WARNINGS:
@@ -1435,8 +1479,12 @@ def main():
     core_count = int((df['중요도'] == LEVEL_CORE).sum()) if not df.empty else 0
     new_count = (int(df['신규'].apply(lambda v: bool(str(v).strip())).sum())
                  if not df.empty else 0)
-    subject = (f'{MAIL_SUBJECT_PREFIX} {end_dt.strftime("%m월 %d일")} '
-               f'🆕신규 {new_count} / ★핵심 {core_count} / 전체 {len(df)}건')
+    if COLLECT_FAILED:
+        subject = (f'{MAIL_SUBJECT_PREFIX} ⚠️ {end_dt.strftime("%m월 %d일")} '
+                   f'조달청 서버 응답 없음 (수집 실패)')
+    else:
+        subject = (f'{MAIL_SUBJECT_PREFIX} {end_dt.strftime("%m월 %d일")} '
+                   f'🆕신규 {new_count} / ★핵심 {core_count} / 전체 {len(df)}건')
     body = build_mail_body(df, start_dt, end_dt)
     send_email(subject, body, attachment)
 
